@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Tilemaps;
 
 public class PlayerMovement : MonoBehaviour
 {
@@ -9,9 +10,15 @@ public class PlayerMovement : MonoBehaviour
     GameObject gridObject;
     GameObject blocking;
 
-    Vector3Int? targetCell = null;
+    new Rigidbody2D rigidbody;
+    Animator animator;
 
+    float speed = 10.0f;
+    float moveTimeLimit = 1.0f;
+
+    Vector3Int? targetCell = null;
     TaskCompletionSource<bool> tcs = null;
+    Coroutine coroutineMove = null;
 
 
     void Awake()
@@ -19,6 +26,9 @@ public class PlayerMovement : MonoBehaviour
         gameManager = GameObject.Find("GameManager");
         gridObject = GameObject.Find("Grid");
         blocking = GameObject.Find("Blocking");
+        rigidbody = GetComponent<Rigidbody2D>();
+        animator = GetComponent<Animator>();
+        moveTimeLimit = 1.5f / speed; // 대각선 고려
     }
 
     public async Task ProcessTurn()
@@ -26,7 +36,7 @@ public class PlayerMovement : MonoBehaviour
         if (targetCell.HasValue)
         {
             print("TargetCell Exist: " + targetCell.Value + ", " + Time.time);
-            MoveToTarget();
+            MoveTowardTarget();
         }
         else
         {
@@ -44,7 +54,7 @@ public class PlayerMovement : MonoBehaviour
         Vector3Int cell = gridObject.GetComponent<Grid>().WorldToCell(position);
         targetCell = cell;
 
-        MoveToTarget();
+        MoveTowardTarget();
         
         if (tcs != null)
             tcs.SetResult(true);
@@ -85,23 +95,58 @@ public class PlayerMovement : MonoBehaviour
             print("Candidate: " + candidate);
             Vector2 candidatePosition = gridObject.GetComponent<Grid>().GetCellCenterWorld(candidate);
 
-            print("Candidate Position: " + candidatePosition);
-            print("Candidate Position Overlap: " + blocking.GetComponent<CompositeCollider2D>().OverlapPoint(candidatePosition));
-            print("Candidate Position Overlap 2: " + blocking.GetComponent<CompositeCollider2D>().OverlapPoint(gridObject.GetComponent<Grid>().CellToWorld(candidate)));
-            if (! blocking.GetComponent<CompositeCollider2D>().OverlapPoint(candidatePosition))
+            TileBase tile = blocking.GetComponent<Tilemap>().GetTile(candidate);
+            if (tile == null)
                 return candidatePosition;
         }
         return null;
     }
 
     // Move to target position by one step.
-    void MoveToTarget()
+    void MoveTowardTarget()
     {
         Vector3? movePosition = GetMovePosition();
 
         if (movePosition.HasValue)
-            transform.position = movePosition.Value;
+        {
+            if (coroutineMove != null)
+            {
+                StopCoroutine(coroutineMove);
+                coroutineMove = null;
+            }
+            coroutineMove = StartCoroutine(SmoothMovement(movePosition.Value));
+        }
         else
             targetCell = null;
     }
+
+    //Co-routine for moving units from one space to next, takes a parameter end to specify where to move to.
+    protected IEnumerator SmoothMovement(Vector3 end)
+    {
+        print("SmoothMovement enter");
+        AnimatorStateInfo stateInfo = animator.GetCurrentAnimatorStateInfo(0);
+        if (stateInfo.shortNameHash == Animator.StringToHash("Idle"))
+            animator.SetTrigger("Run");
+
+        float startTime = Time.time;
+        float sqrRemainingDistance = (transform.position - end).sqrMagnitude;
+
+        while ((sqrRemainingDistance > float.Epsilon) && ((Time.time - startTime) < moveTimeLimit))
+        {
+            Vector3 newPosition = Vector3.MoveTowards(transform.position, end, speed * Time.deltaTime);
+            transform.position = newPosition;
+            sqrRemainingDistance = (transform.position - end).sqrMagnitude;
+            print("SmoothMovement: " + newPosition + ", " + sqrRemainingDistance + ", " + (Time.time - startTime));
+            yield return null;
+        }
+        transform.position = end;
+
+        stateInfo = animator.GetCurrentAnimatorStateInfo(0);
+        if (stateInfo.shortNameHash == Animator.StringToHash("Run"))
+            animator.SetTrigger("Idle");
+
+        print("SmoothMovement exit");
+        coroutineMove = null;
+    }
+
 }
